@@ -1,0 +1,27 @@
+<resources>
+    <string name="app_name">Калькулятор</string>
+
+    <!-- Main Activity -->
+    <string name="first_operand">Первый операнд</string>
+    <string name="second_operand">Второй операнд</string>
+    <string name="select_operation">Выбор операции</string>
+    <string name="calculate">Посчитать</string>
+    <string name="clear">Очистить</string>
+
+    <!-- Operations -->
+    <string name="addition">Сложение (+)</string>
+    <string name="subtraction">Вычитание (-)</string>
+    <string name="multiplication">Умножение (×)</string>
+    <string name="division">Частное (÷)</string>
+
+    <!-- Result Activity -->
+    <string name="result_title">Результат</string>
+    <string name="calculation_formula">%1$s %2$s %3$s =</string>
+    <string name="back_button">Назад</string>
+
+    <!-- Errors -->
+    <string name="error_empty_field">Введите оба операнда</string>
+    <string name="error_invalid_number">Введите валидные числа</string>
+    <string name="error_division_by_zero">Ошибка: Деление на 0</string>
+</resources>
+
