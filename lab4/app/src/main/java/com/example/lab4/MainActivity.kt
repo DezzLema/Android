@@ -4,9 +4,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,9 +19,11 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.imageResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlin.math.cos
 import kotlin.math.sin
@@ -29,7 +34,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            DodgeGame()
+            MaterialTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    DodgeGame()
+                }
+            }
         }
     }
 }
@@ -41,29 +53,58 @@ data class GameObject(
     val imageId: Int
 )
 
+data class GameLevel(
+    val levelNumber: Int,
+    val enemyCount: Int,
+    val baseEnemySpeed: Float,
+    val enemySizeMultiplier: Float,
+    val spawnRate: Int
+)
+
 @Composable
 fun DodgeGame() {
     var gameState by remember { mutableStateOf(GameState.WAITING) }
     var player by remember { mutableStateOf(createPlayer()) }
     var enemies by remember { mutableStateOf(listOf<GameObject>()) }
     var score by remember { mutableStateOf(0) }
+    var currentLevel by remember { mutableStateOf(1) }
+    var levelProgress by remember { mutableStateOf(0f) }
 
-    // Размеры экрана
     var screenSize by remember { mutableStateOf(Offset.Zero) }
 
-    // Загружаем изображения
     val playerImage = ImageBitmap.imageResource(id = R.drawable.player1)
     val enemyImage = ImageBitmap.imageResource(id = R.drawable.enemy1)
     val backgroundImage = ImageBitmap.imageResource(id = R.drawable.background)
 
+    val currentLevelConfig = getLevelConfig(currentLevel)
+
     LaunchedEffect(gameState) {
         if (gameState == GameState.PLAYING) {
+            var frameCount = 0
             while (gameState == GameState.PLAYING) {
                 delay(16)
+                frameCount++
 
                 if (screenSize != Offset.Zero) {
                     player = updatePlayer(player, screenSize)
                     enemies = enemies.map { updateEnemy(it, screenSize) }
+
+                    levelProgress = (score % 1800).toFloat() / 1800f
+
+                    if (score > 0 && score % 1800 == 0) {
+                        currentLevel++
+                    }
+
+                    if (frameCount % currentLevelConfig.spawnRate == 0 &&
+                        enemies.size < currentLevelConfig.enemyCount) {
+                        val newEnemy = createEnemy(screenSize, currentLevelConfig)
+                        enemies = enemies + newEnemy
+                    }
+
+                    enemies = enemies.filter { enemy ->
+                        enemy.position.x in -enemy.radius..screenSize.x + enemy.radius &&
+                                enemy.position.y in -enemy.radius..screenSize.y + enemy.radius
+                    }
 
                     if (checkCollisions(player, enemies)) {
                         gameState = GameState.GAME_OVER
@@ -84,10 +125,10 @@ fun DodgeGame() {
                         GameState.WAITING -> {
                             gameState = GameState.PLAYING
                             player = createPlayer()
-                            if (screenSize != Offset.Zero) {
-                                enemies = createEnemies(5, screenSize)
-                            }
+                            enemies = emptyList()
                             score = 0
+                            currentLevel = 1
+                            levelProgress = 0f
                         }
                         GameState.PLAYING -> {
                             val dragVector = Offset(dragAmount.x, dragAmount.y)
@@ -99,7 +140,7 @@ fun DodgeGame() {
                 }
             }
     ) {
-        // Игровое поле с Canvas
+        // Игровое поле с Canvas - теперь ПОД интерфейсом
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
@@ -110,21 +151,18 @@ fun DodgeGame() {
                     )
                     if (newSize != screenSize) {
                         screenSize = newSize
-                        if (gameState == GameState.PLAYING) {
-                            enemies = createEnemies(5, newSize)
-                        }
                     }
                 }
         ) {
             if (screenSize != Offset.Zero && gameState == GameState.PLAYING) {
-                // Рисуем фон - ИСПРАВЛЕНО
+                // Рисуем фон
                 drawImage(
                     image = backgroundImage,
                     dstOffset = IntOffset(0, 0),
                     dstSize = IntSize(screenSize.x.toInt(), screenSize.y.toInt())
                 )
 
-                // Рисуем игрока - ИСПРАВЛЕНО
+                // Рисуем игрока
                 drawImage(
                     image = playerImage,
                     dstOffset = IntOffset(
@@ -134,7 +172,7 @@ fun DodgeGame() {
                     dstSize = IntSize((player.radius * 2).toInt(), (player.radius * 2).toInt())
                 )
 
-                // Рисуем врагов - ИСПРАВЛЕНО
+                // Рисуем врагов
                 enemies.forEach { enemy ->
                     drawImage(
                         image = enemyImage,
@@ -148,7 +186,7 @@ fun DodgeGame() {
             }
         }
 
-        // Интерфейс
+        // Интерфейс - теперь ПОВЕРХ Canvas
         when (gameState) {
             GameState.WAITING -> {
                 Column(
@@ -157,29 +195,68 @@ fun DodgeGame() {
                 ) {
                     Text(
                         text = "Увернись от врагов!",
-                        modifier = Modifier.padding(16.dp)
+                        modifier = Modifier.padding(16.dp),
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold
                     )
                     Text(
                         text = "Свайпайте чтобы начать и управлять",
-                        modifier = Modifier.padding(16.dp)
+                        modifier = Modifier.padding(16.dp),
+                        fontSize = 16.sp
+                    )
+                    Text(
+                        text = "Сложность растет с каждым уровнем!",
+                        modifier = Modifier.padding(16.dp),
+                        fontSize = 14.sp
                     )
                 }
             }
 
             GameState.PLAYING -> {
+                // Улучшенный интерфейс с полупрозрачным фоном
                 Column(
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(16.dp)
                 ) {
-                    Text(
-                        text = "Счет: ${score / 60}",
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    Text(
-                        text = "Скорость: ${"%.1f".format(sqrt(player.velocity.x * player.velocity.x + player.velocity.y * player.velocity.y))}",
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
+                    // Полупрозрачный фон для текста
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                color = Color.Black.copy(alpha = 0.6f),
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                            )
+                            .padding(12.dp)
+                    ) {
+                        Column {
+                            Text(
+                                text = "Уровень: $currentLevel",
+                                modifier = Modifier.padding(bottom = 4.dp),
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Прогресс: ${(levelProgress * 100).toInt()}%",
+                                modifier = Modifier.padding(bottom = 6.dp),
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Счет: ${score / 60}",
+                                modifier = Modifier.padding(bottom = 4.dp),
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Врагов: ${enemies.size}/${currentLevelConfig.enemyCount}",
+                                modifier = Modifier.padding(bottom = 4.dp),
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Скорость: ${"%.1f".format(sqrt(player.velocity.x * player.velocity.x + player.velocity.y * player.velocity.y))}",
+                                color = Color.White
+                            )
+                        }
+                    }
                 }
             }
 
@@ -188,20 +265,44 @@ fun DodgeGame() {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.align(Alignment.Center)
                 ) {
-                    Text(
-                        text = "Игра окончена!",
-                        modifier = Modifier.padding(16.dp)
-                    )
-                    Text(
-                        text = "Счет: ${score / 60}",
-                        modifier = Modifier.padding(16.dp)
-                    )
-                    Button(
-                        onClick = {
-                            gameState = GameState.WAITING
-                        }
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                color = Color.Black.copy(alpha = 0.8f),
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
+                            )
+                            .padding(24.dp)
                     ) {
-                        Text("Начать заново")
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Игра окончена!",
+                                modifier = Modifier.padding(bottom = 16.dp),
+                                fontSize = 28.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Достигнут уровень: $currentLevel",
+                                modifier = Modifier.padding(bottom = 8.dp),
+                                fontSize = 18.sp,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Счет: ${score / 60}",
+                                modifier = Modifier.padding(bottom = 24.dp),
+                                fontSize = 18.sp,
+                                color = Color.White
+                            )
+                            Button(
+                                onClick = {
+                                    gameState = GameState.WAITING
+                                }
+                            ) {
+                                Text("Начать заново", fontSize = 16.sp)
+                            }
+                        }
                     }
                 }
             }
@@ -209,7 +310,43 @@ fun DodgeGame() {
     }
 }
 
-// Остальные функции остаются без изменений
+// Конфигурация уровней
+private fun getLevelConfig(level: Int): GameLevel {
+    val baseEnemyCount = 5
+    val baseSpeed = 2f
+    val baseSize = 1f
+
+    return when {
+        level <= 5 -> {
+            GameLevel(
+                levelNumber = level,
+                enemyCount = baseEnemyCount + level * 2,
+                baseEnemySpeed = baseSpeed + level * 0.3f,
+                enemySizeMultiplier = baseSize,
+                spawnRate = 120 - level * 10
+            )
+        }
+        level <= 10 -> {
+            GameLevel(
+                levelNumber = level,
+                enemyCount = 15 + (level - 5) * 3,
+                baseEnemySpeed = 3.5f + (level - 5) * 0.4f,
+                enemySizeMultiplier = 0.9f - (level - 5) * 0.05f,
+                spawnRate = 70 - (level - 5) * 5
+            )
+        }
+        else -> {
+            GameLevel(
+                levelNumber = level,
+                enemyCount = 30 + (level - 10),
+                baseEnemySpeed = 6f + (level - 10) * 0.2f,
+                enemySizeMultiplier = 0.6f,
+                spawnRate = 20
+            )
+        }
+    }
+}
+
 private fun calculateNewVelocity(currentVelocity: Offset, dragVector: Offset): Offset {
     val sensitivity = 0.3f
     val velocityChange = dragVector * sensitivity
@@ -235,37 +372,34 @@ private fun Offset.normalize(): Offset {
     return if (length > 0) Offset(x / length, y / length) else Offset(0f, 0f)
 }
 
-// Создание игрока с изображением
 private fun createPlayer(): GameObject {
     return GameObject(
         position = Offset(200f, 200f),
         velocity = Offset(3f, 3f),
         radius = 40f,
-        imageId = R.drawable.player
+        imageId = R.drawable.player1
     )
 }
 
-// Создание врагов с изображениями
-private fun createEnemies(count: Int, screenSize: Offset): List<GameObject> {
-    return List(count) {
-        val angle = Random.nextDouble(0.0, 2 * Math.PI).toFloat()
-        val speed = Random.nextFloat() * 3 + 2
-        GameObject(
-            position = Offset(
-                Random.nextFloat() * (screenSize.x - 80) + 40,
-                Random.nextFloat() * (screenSize.y - 80) + 40
-            ),
-            velocity = Offset(
-                cos(angle) * speed,
-                sin(angle) * speed
-            ),
-            radius = Random.nextFloat() * 25 + 20,
-            imageId = R.drawable.enemy
-        )
-    }
+private fun createEnemy(screenSize: Offset, levelConfig: GameLevel): GameObject {
+    val angle = Random.nextDouble(0.0, 2 * Math.PI).toFloat()
+    val speedVariation = Random.nextFloat() * 1.5f - 0.75f
+    val baseSpeed = levelConfig.baseEnemySpeed
+
+    return GameObject(
+        position = Offset(
+            Random.nextFloat() * (screenSize.x - 80) + 40,
+            Random.nextFloat() * (screenSize.y - 80) + 40
+        ),
+        velocity = Offset(
+            cos(angle) * (baseSpeed + speedVariation),
+            sin(angle) * (baseSpeed + speedVariation)
+        ),
+        radius = (Random.nextFloat() * 15 + 20) * levelConfig.enemySizeMultiplier,
+        imageId = R.drawable.enemy1
+    )
 }
 
-// Функции updatePlayer, updateEnemy, checkCollisions остаются без изменений
 private fun updatePlayer(player: GameObject, screenSize: Offset): GameObject {
     var newPosition = player.position + player.velocity
     var newVelocity = player.velocity
