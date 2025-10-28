@@ -28,6 +28,7 @@ import kotlinx.coroutines.delay
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.max
 import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
@@ -91,19 +92,34 @@ fun DodgeGame() {
 
                     levelProgress = (score % 1800).toFloat() / 1800f
 
+                    // Переход на следующий уровень каждые 30 секунд
                     if (score > 0 && score % 1800 == 0) {
                         currentLevel++
+                        // ДОБАВЛЯЕМ новых врагов при переходе на новый уровень
+                        val newLevelConfig = getLevelConfig(currentLevel)
+                        val additionalEnemies = newLevelConfig.enemyCount - enemies.size
+                        if (additionalEnemies > 0) {
+                            repeat(minOf(additionalEnemies, 5)) {
+                                val newEnemy = createEnemy(screenSize, newLevelConfig)
+                                enemies = enemies + newEnemy
+                            }
+                        }
                     }
 
-                    if (frameCount % currentLevelConfig.spawnRate == 0 &&
-                        enemies.size < currentLevelConfig.enemyCount) {
-                        val newEnemy = createEnemy(screenSize, currentLevelConfig)
-                        enemies = enemies + newEnemy
+                    // ЛОГИКА СПАУНА ВРАГОВ - только добавление
+                    if (frameCount % currentLevelConfig.spawnRate == 0) {
+                        // Просто добавляем нового врага, если не превышен лимит
+                        if (enemies.size < currentLevelConfig.enemyCount) {
+                            val newEnemy = createEnemy(screenSize, currentLevelConfig)
+                            enemies = enemies + newEnemy
+                        }
                     }
 
+                    // Удаление только тех врагов, которые действительно далеко за пределами экрана
                     enemies = enemies.filter { enemy ->
-                        enemy.position.x in -enemy.radius..screenSize.x + enemy.radius &&
-                                enemy.position.y in -enemy.radius..screenSize.y + enemy.radius
+                        val margin = 150f
+                        enemy.position.x in -margin..screenSize.x + margin &&
+                                enemy.position.y in -margin..screenSize.y + margin
                     }
 
                     if (checkCollisions(player, enemies)) {
@@ -125,7 +141,9 @@ fun DodgeGame() {
                         GameState.WAITING -> {
                             gameState = GameState.PLAYING
                             player = createPlayer()
-                            enemies = emptyList()
+                            if (screenSize != Offset.Zero) {
+                                enemies = createInitialEnemies(screenSize, getLevelConfig(1))
+                            }
                             score = 0
                             currentLevel = 1
                             levelProgress = 0f
@@ -140,7 +158,7 @@ fun DodgeGame() {
                 }
             }
     ) {
-        // Игровое поле с Canvas - теперь ПОД интерфейсом
+        // Игровое поле с Canvas
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
@@ -186,7 +204,7 @@ fun DodgeGame() {
             }
         }
 
-        // Интерфейс - теперь ПОВЕРХ Canvas
+        // Интерфейс
         when (gameState) {
             GameState.WAITING -> {
                 Column(
@@ -213,7 +231,6 @@ fun DodgeGame() {
             }
 
             GameState.PLAYING -> {
-                // Улучшенный интерфейс с полупрозрачным фоном
                 Column(
                     modifier = Modifier
                         .align(Alignment.TopStart)
@@ -312,36 +329,32 @@ fun DodgeGame() {
 
 // Конфигурация уровней
 private fun getLevelConfig(level: Int): GameLevel {
-    val baseEnemyCount = 5
-    val baseSpeed = 2f
-    val baseSize = 1f
-
     return when {
         level <= 5 -> {
             GameLevel(
                 levelNumber = level,
-                enemyCount = baseEnemyCount + level * 2,
-                baseEnemySpeed = baseSpeed + level * 0.3f,
-                enemySizeMultiplier = baseSize,
-                spawnRate = 120 - level * 10
+                enemyCount = 8 + (level - 1) * 3, // 8, 11, 14, 17, 20 врагов
+                baseEnemySpeed = 2f + level * 0.4f,
+                enemySizeMultiplier = 1f,
+                spawnRate = max(20, 60 - level * 8) // Частая генерация
             )
         }
         level <= 10 -> {
             GameLevel(
                 levelNumber = level,
-                enemyCount = 15 + (level - 5) * 3,
-                baseEnemySpeed = 3.5f + (level - 5) * 0.4f,
-                enemySizeMultiplier = 0.9f - (level - 5) * 0.05f,
-                spawnRate = 70 - (level - 5) * 5
+                enemyCount = 20 + (level - 5) * 5, // 25, 30, 35, 40, 45 врагов
+                baseEnemySpeed = 4f + (level - 5) * 0.5f,
+                enemySizeMultiplier = 0.8f,
+                spawnRate = max(15, 40 - (level - 5) * 5)
             )
         }
         else -> {
             GameLevel(
                 levelNumber = level,
-                enemyCount = 30 + (level - 10),
-                baseEnemySpeed = 6f + (level - 10) * 0.2f,
+                enemyCount = 45 + (level - 10) * 4,
+                baseEnemySpeed = 6.5f + (level - 10) * 0.3f,
                 enemySizeMultiplier = 0.6f,
-                spawnRate = 20
+                spawnRate = max(10, 20 - (level - 10))
             )
         }
     }
@@ -386,11 +399,36 @@ private fun createEnemy(screenSize: Offset, levelConfig: GameLevel): GameObject 
     val speedVariation = Random.nextFloat() * 1.5f - 0.75f
     val baseSpeed = levelConfig.baseEnemySpeed
 
+    // Разные стратегии спауна для разнообразия
+    val spawnType = Random.nextInt(0, 3)
+    val position = when (spawnType) {
+        0 -> {
+            // Спаун с краев
+            if (Random.nextBoolean()) {
+                Offset(-30f, Random.nextFloat() * screenSize.y)
+            } else {
+                Offset(screenSize.x + 30f, Random.nextFloat() * screenSize.y)
+            }
+        }
+        1 -> {
+            // Спаун сверху/снизу
+            if (Random.nextBoolean()) {
+                Offset(Random.nextFloat() * screenSize.x, -30f)
+            } else {
+                Offset(Random.nextFloat() * screenSize.x, screenSize.y + 30f)
+            }
+        }
+        else -> {
+            // Обычный спаун в пределах экрана
+            Offset(
+                Random.nextFloat() * (screenSize.x - 80) + 40,
+                Random.nextFloat() * (screenSize.y - 80) + 40
+            )
+        }
+    }
+
     return GameObject(
-        position = Offset(
-            Random.nextFloat() * (screenSize.x - 80) + 40,
-            Random.nextFloat() * (screenSize.y - 80) + 40
-        ),
+        position = position,
         velocity = Offset(
             cos(angle) * (baseSpeed + speedVariation),
             sin(angle) * (baseSpeed + speedVariation)
@@ -459,6 +497,16 @@ private fun checkCollisions(player: GameObject, enemies: List<GameObject>): Bool
         val distance = sqrt(dx * dx + dy * dy)
         distance < player.radius + enemy.radius
     }
+}
+
+private fun createInitialEnemies(screenSize: Offset, levelConfig: GameLevel): List<GameObject> {
+    return List(minOf(5, levelConfig.enemyCount)) {
+        createEnemy(screenSize, levelConfig)
+    }
+}
+
+private fun minOf(a: Int, b: Int): Int {
+    return if (a < b) a else b
 }
 
 enum class GameState {
