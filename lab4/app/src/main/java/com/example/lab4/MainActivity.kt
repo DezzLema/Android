@@ -12,12 +12,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.res.imageResource
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
-import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -36,7 +38,7 @@ data class GameObject(
     val position: Offset,
     val velocity: Offset,
     val radius: Float,
-    val color: Color
+    val imageId: Int
 )
 
 @Composable
@@ -49,18 +51,20 @@ fun DodgeGame() {
     // Размеры экрана
     var screenSize by remember { mutableStateOf(Offset.Zero) }
 
+    // Загружаем изображения
+    val playerImage = ImageBitmap.imageResource(id = R.drawable.player1)
+    val enemyImage = ImageBitmap.imageResource(id = R.drawable.enemy1)
+    val backgroundImage = ImageBitmap.imageResource(id = R.drawable.background)
+
     LaunchedEffect(gameState) {
         if (gameState == GameState.PLAYING) {
             while (gameState == GameState.PLAYING) {
-                // Игровой цикл - 60 FPS
                 delay(16)
 
-                // Обновление позиций только если экран инициализирован
                 if (screenSize != Offset.Zero) {
                     player = updatePlayer(player, screenSize)
                     enemies = enemies.map { updateEnemy(it, screenSize) }
 
-                    // Проверка столкновений
                     if (checkCollisions(player, enemies)) {
                         gameState = GameState.GAME_OVER
                     }
@@ -78,7 +82,6 @@ fun DodgeGame() {
                 detectDragGestures { change, dragAmount ->
                     when (gameState) {
                         GameState.WAITING -> {
-                            // Начало игры при первом свайпе
                             gameState = GameState.PLAYING
                             player = createPlayer()
                             if (screenSize != Offset.Zero) {
@@ -87,7 +90,6 @@ fun DodgeGame() {
                             score = 0
                         }
                         GameState.PLAYING -> {
-                            // Управление направлением игрока
                             val dragVector = Offset(dragAmount.x, dragAmount.y)
                             val newVelocity = calculateNewVelocity(player.velocity, dragVector)
                             player = player.copy(velocity = newVelocity)
@@ -97,7 +99,7 @@ fun DodgeGame() {
                 }
             }
     ) {
-        // Игровое поле
+        // Игровое поле с Canvas
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
@@ -108,37 +110,39 @@ fun DodgeGame() {
                     )
                     if (newSize != screenSize) {
                         screenSize = newSize
-                        // Пересоздаем врагов при изменении размера экрана
                         if (gameState == GameState.PLAYING) {
                             enemies = createEnemies(5, newSize)
                         }
                     }
                 }
         ) {
-            // Отрисовка только если игра активна и экран инициализирован
             if (screenSize != Offset.Zero && gameState == GameState.PLAYING) {
-                // Отрисовка игрока
-                drawCircle(
-                    color = player.color,
-                    center = player.position,
-                    radius = player.radius
+                // Рисуем фон - ИСПРАВЛЕНО
+                drawImage(
+                    image = backgroundImage,
+                    dstOffset = IntOffset(0, 0),
+                    dstSize = IntSize(screenSize.x.toInt(), screenSize.y.toInt())
                 )
 
-                // Отрисовка направления игрока (маленькая линия)
-                val directionLine = player.position + player.velocity.normalize() * player.radius * 1.5f
-                drawLine(
-                    color = Color.White,
-                    start = player.position,
-                    end = directionLine,
-                    strokeWidth = 3f
+                // Рисуем игрока - ИСПРАВЛЕНО
+                drawImage(
+                    image = playerImage,
+                    dstOffset = IntOffset(
+                        (player.position.x - player.radius).toInt(),
+                        (player.position.y - player.radius).toInt()
+                    ),
+                    dstSize = IntSize((player.radius * 2).toInt(), (player.radius * 2).toInt())
                 )
 
-                // Отрисовка врагов
+                // Рисуем врагов - ИСПРАВЛЕНО
                 enemies.forEach { enemy ->
-                    drawCircle(
-                        color = enemy.color,
-                        center = enemy.position,
-                        radius = enemy.radius
+                    drawImage(
+                        image = enemyImage,
+                        dstOffset = IntOffset(
+                            (enemy.position.x - enemy.radius).toInt(),
+                            (enemy.position.y - enemy.radius).toInt()
+                        ),
+                        dstSize = IntSize((enemy.radius * 2).toInt(), (enemy.radius * 2).toInt())
                     )
                 }
             }
@@ -152,7 +156,7 @@ fun DodgeGame() {
                     modifier = Modifier.align(Alignment.Center)
                 ) {
                     Text(
-                        text = "Увернись от шаров!",
+                        text = "Увернись от врагов!",
                         modifier = Modifier.padding(16.dp)
                     )
                     Text(
@@ -174,10 +178,6 @@ fun DodgeGame() {
                     )
                     Text(
                         text = "Скорость: ${"%.1f".format(sqrt(player.velocity.x * player.velocity.x + player.velocity.y * player.velocity.y))}",
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    Text(
-                        text = "Управление: свайпайте в нужном направлении",
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
                 }
@@ -209,23 +209,19 @@ fun DodgeGame() {
     }
 }
 
-// Функция для вычисления нового направления на основе свайпа
+// Остальные функции остаются без изменений
 private fun calculateNewVelocity(currentVelocity: Offset, dragVector: Offset): Offset {
-    // Базовое изменение скорости (можно настроить чувствительность)
     val sensitivity = 0.3f
     val velocityChange = dragVector * sensitivity
 
-    // Добавляем изменение к текущей скорости
     var newVelocity = currentVelocity + velocityChange
 
-    // Ограничиваем максимальную скорость
     val maxSpeed = 8f
     val currentSpeed = sqrt(newVelocity.x * newVelocity.x + newVelocity.y * newVelocity.y)
     if (currentSpeed > maxSpeed) {
         newVelocity = newVelocity * (maxSpeed / currentSpeed)
     }
 
-    // Гарантируем минимальную скорость
     val minSpeed = 2f
     if (currentSpeed < minSpeed && currentSpeed > 0) {
         newVelocity = newVelocity * (minSpeed / currentSpeed)
@@ -234,48 +230,46 @@ private fun calculateNewVelocity(currentVelocity: Offset, dragVector: Offset): O
     return newVelocity
 }
 
-// Функция для нормализации вектора (приведение к длине 1)
 private fun Offset.normalize(): Offset {
     val length = sqrt(x * x + y * y)
     return if (length > 0) Offset(x / length, y / length) else Offset(0f, 0f)
 }
 
-// Создание игрока
+// Создание игрока с изображением
 private fun createPlayer(): GameObject {
     return GameObject(
         position = Offset(200f, 200f),
         velocity = Offset(3f, 3f),
-        radius = 25f, // Немного увеличим радиус для лучшей видимости
-        color = Color.Blue
+        radius = 40f,
+        imageId = R.drawable.player
     )
 }
 
-// Создание врагов
+// Создание врагов с изображениями
 private fun createEnemies(count: Int, screenSize: Offset): List<GameObject> {
     return List(count) {
         val angle = Random.nextDouble(0.0, 2 * Math.PI).toFloat()
         val speed = Random.nextFloat() * 3 + 2
         GameObject(
             position = Offset(
-                Random.nextFloat() * (screenSize.x - 40) + 20,
-                Random.nextFloat() * (screenSize.y - 40) + 20
+                Random.nextFloat() * (screenSize.x - 80) + 40,
+                Random.nextFloat() * (screenSize.y - 80) + 40
             ),
             velocity = Offset(
                 cos(angle) * speed,
                 sin(angle) * speed
             ),
-            radius = Random.nextFloat() * 15 + 10,
-            color = Color.Red
+            radius = Random.nextFloat() * 25 + 20,
+            imageId = R.drawable.enemy
         )
     }
 }
 
-// Обновление позиции игрока
+// Функции updatePlayer, updateEnemy, checkCollisions остаются без изменений
 private fun updatePlayer(player: GameObject, screenSize: Offset): GameObject {
     var newPosition = player.position + player.velocity
     var newVelocity = player.velocity
 
-    // Отскок от стен с корректной позицией
     if (newPosition.x - player.radius < 0) {
         newPosition = newPosition.copy(x = player.radius)
         newVelocity = newVelocity.copy(x = -newVelocity.x)
@@ -298,12 +292,10 @@ private fun updatePlayer(player: GameObject, screenSize: Offset): GameObject {
     )
 }
 
-// Обновление позиции врагов
 private fun updateEnemy(enemy: GameObject, screenSize: Offset): GameObject {
     var newPosition = enemy.position + enemy.velocity
     var newVelocity = enemy.velocity
 
-    // Отскок от стен
     if (newPosition.x - enemy.radius < 0) {
         newPosition = newPosition.copy(x = enemy.radius)
         newVelocity = newVelocity.copy(x = -newVelocity.x)
@@ -326,7 +318,6 @@ private fun updateEnemy(enemy: GameObject, screenSize: Offset): GameObject {
     )
 }
 
-// Проверка столкновений
 private fun checkCollisions(player: GameObject, enemies: List<GameObject>): Boolean {
     return enemies.any { enemy ->
         val dx = player.position.x - enemy.position.x
@@ -336,7 +327,6 @@ private fun checkCollisions(player: GameObject, enemies: List<GameObject>): Bool
     }
 }
 
-// Состояния игры
 enum class GameState {
     WAITING, PLAYING, GAME_OVER
 }
