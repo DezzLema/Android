@@ -4,7 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
@@ -17,6 +17,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -73,19 +74,24 @@ fun DodgeGame() {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(Unit) {
-                detectTapGestures {
+            .pointerInput(gameState) {
+                detectDragGestures { change, dragAmount ->
                     when (gameState) {
                         GameState.WAITING -> {
+                            // Начало игры при первом свайпе
                             gameState = GameState.PLAYING
                             player = createPlayer()
-                            // Ждем инициализации screenSize перед созданием врагов
                             if (screenSize != Offset.Zero) {
                                 enemies = createEnemies(5, screenSize)
                             }
                             score = 0
                         }
-
+                        GameState.PLAYING -> {
+                            // Управление направлением игрока
+                            val dragVector = Offset(dragAmount.x, dragAmount.y)
+                            val newVelocity = calculateNewVelocity(player.velocity, dragVector)
+                            player = player.copy(velocity = newVelocity)
+                        }
                         else -> {}
                     }
                 }
@@ -118,6 +124,15 @@ fun DodgeGame() {
                     radius = player.radius
                 )
 
+                // Отрисовка направления игрока (маленькая линия)
+                val directionLine = player.position + player.velocity.normalize() * player.radius * 1.5f
+                drawLine(
+                    color = Color.White,
+                    start = player.position,
+                    end = directionLine,
+                    strokeWidth = 3f
+                )
+
                 // Отрисовка врагов
                 enemies.forEach { enemy ->
                     drawCircle(
@@ -132,19 +147,40 @@ fun DodgeGame() {
         // Интерфейс
         when (gameState) {
             GameState.WAITING -> {
-                Text(
-                    text = "Нажмите для начала", // Временно, пока не настроены ресурсы
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.align(Alignment.Center)
-                )
+                ) {
+                    Text(
+                        text = "Увернись от шаров!",
+                        modifier = Modifier.padding(16.dp)
+                    )
+                    Text(
+                        text = "Свайпайте чтобы начать и управлять",
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
             }
 
             GameState.PLAYING -> {
-                Text(
-                    text = "Счет: ${score / 60}",
+                Column(
                     modifier = Modifier
-                        .align(Alignment.TopCenter)
+                        .align(Alignment.TopStart)
                         .padding(16.dp)
-                )
+                ) {
+                    Text(
+                        text = "Счет: ${score / 60}",
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    Text(
+                        text = "Скорость: ${"%.1f".format(sqrt(player.velocity.x * player.velocity.x + player.velocity.y * player.velocity.y))}",
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    Text(
+                        text = "Управление: свайпайте в нужном направлении",
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
             }
 
             GameState.GAME_OVER -> {
@@ -173,12 +209,43 @@ fun DodgeGame() {
     }
 }
 
+// Функция для вычисления нового направления на основе свайпа
+private fun calculateNewVelocity(currentVelocity: Offset, dragVector: Offset): Offset {
+    // Базовое изменение скорости (можно настроить чувствительность)
+    val sensitivity = 0.3f
+    val velocityChange = dragVector * sensitivity
+
+    // Добавляем изменение к текущей скорости
+    var newVelocity = currentVelocity + velocityChange
+
+    // Ограничиваем максимальную скорость
+    val maxSpeed = 8f
+    val currentSpeed = sqrt(newVelocity.x * newVelocity.x + newVelocity.y * newVelocity.y)
+    if (currentSpeed > maxSpeed) {
+        newVelocity = newVelocity * (maxSpeed / currentSpeed)
+    }
+
+    // Гарантируем минимальную скорость
+    val minSpeed = 2f
+    if (currentSpeed < minSpeed && currentSpeed > 0) {
+        newVelocity = newVelocity * (minSpeed / currentSpeed)
+    }
+
+    return newVelocity
+}
+
+// Функция для нормализации вектора (приведение к длине 1)
+private fun Offset.normalize(): Offset {
+    val length = sqrt(x * x + y * y)
+    return if (length > 0) Offset(x / length, y / length) else Offset(0f, 0f)
+}
+
 // Создание игрока
 private fun createPlayer(): GameObject {
     return GameObject(
         position = Offset(200f, 200f),
         velocity = Offset(3f, 3f),
-        radius = 20f,
+        radius = 25f, // Немного увеличим радиус для лучшей видимости
         color = Color.Blue
     )
 }
@@ -190,7 +257,7 @@ private fun createEnemies(count: Int, screenSize: Offset): List<GameObject> {
         val speed = Random.nextFloat() * 3 + 2
         GameObject(
             position = Offset(
-                Random.nextFloat() * (screenSize.x - 40) + 20, // Не создавать у самых краев
+                Random.nextFloat() * (screenSize.x - 40) + 20,
                 Random.nextFloat() * (screenSize.y - 40) + 20
             ),
             velocity = Offset(
