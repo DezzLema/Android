@@ -407,23 +407,12 @@ fun DodgeGame() {
             }
 
             GameState.STATS -> {
-                val scope = rememberCoroutineScope()
-
                 StatisticsScreen(
                     stats = finalStats,
                     playerName = playerName,
                     onNameChange = { playerName = it },
                     onSaveScore = {
-                        finalStats?.let { stats ->
-                            scope.launch {
-                                GameStatistics.saveHighScore(context, HighScore(
-                                    playerName = playerName,
-                                    score = stats.score,
-                                    level = stats.level,
-                                    timeSeconds = stats.timeSeconds
-                                ))
-                            }
-                        }
+                        // Только переход в меню, сохранение будет внутри StatisticsScreen
                         gameState = GameState.WAITING
                     },
                     onBackToMenu = {
@@ -539,7 +528,7 @@ fun StatisticsScreen(
     onBackToMenu: () -> Unit
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope() // Добавьте эту строку
+    val scope = rememberCoroutineScope()
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -594,7 +583,7 @@ fun StatisticsScreen(
             ) {
                 Button(onClick = {
                     // Сохраняем результат в Room
-                    scope.launch { // Используйте scope.launch вместо CoroutineScope(Dispatchers.IO).launch
+                    scope.launch {
                         GameStatistics.saveHighScore(
                             context, HighScore(
                                 playerName = if (playerName.isBlank()) "Игрок" else playerName,
@@ -604,7 +593,7 @@ fun StatisticsScreen(
                             )
                         )
                     }
-                    onSaveScore()
+                    onSaveScore() // Вызываем callback для перехода в меню
                 }) {
                     Text("Сохранить результат")
                 }
@@ -736,7 +725,7 @@ fun HighScoresScreen(onBack: () -> Unit) {
                         val repository = GameRepository(context)
                         repository.clearAll()
                         // Обновляем список
-                        highScores = GameStatistics.getHighScores(context)
+                        highScores = emptyList() // Просто очищаем список на экране
                     }
                 },
                 modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -780,7 +769,7 @@ fun HighScoreItem(score: HighScore) {
     Divider(color = Color.White.copy(alpha = 0.3f), thickness = 1.dp)
 }
 
-// Остальные функции без изменений
+
 private fun getLevelConfig(level: Int): GameLevel {
     return when {
         level <= 5 -> {
