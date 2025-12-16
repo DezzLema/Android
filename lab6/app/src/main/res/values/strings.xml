@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Простая игра</string>
+    <string name="score">Счет: %d</string>
+    <string name="game_over">Игра окончена!</string>
+    <string name="restart">Начать заново</string>
+    <string name="tap_to_start">Нажмите для начала</string>
+</resources>

@@ -25,7 +25,11 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.firebase.Firebase
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.firestore
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.tasks.await
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -33,6 +37,8 @@ import kotlin.math.max
 import kotlin.random.Random
 import androidx.compose.foundation.shape.RoundedCornerShape
 import java.util.*
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,32 +66,83 @@ data class GameStats(
 
 // Модель для таблицы рекордов
 data class HighScore(
+    val id: String = "",
     val playerName: String,
     val score: Int,
     val level: Int,
     val timeSeconds: Int,
-    val date: Date = Date()
+    val date: Date = Date(),
+    val deviceId: String = ""
 )
 
-// Объект для управления статистикой
+// Объект для управления статистикой с Firebase
 object GameStatistics {
     private const val PREFS_NAME = "game_stats"
+    private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_HIGH_SCORES = "high_scores"
     private const val KEY_TOTAL_GAMES = "total_games"
     private const val KEY_TOTAL_TIME = "total_time"
     private const val KEY_BEST_LEVEL = "best_level"
+    private const val KEY_BEST_SCORE = "best_score"
 
-    // Сохранить рекорд
-    fun saveHighScore(context: Context, highScore: HighScore) {
+    // Инициализируем Firebase Firestore
+    private val db = Firebase.firestore
+    private const val HIGH_SCORES_COLLECTION = "high_scores"
+    private const val TOTAL_STATS_DOCUMENT = "global_stats"
+
+    // Генерируем или получаем уникальный ID устройства
+    fun getDeviceId(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val highScores = getHighScores(context).toMutableList()
+        var deviceId = prefs.getString(KEY_DEVICE_ID, "")
+
+        if (deviceId.isNullOrEmpty()) {
+            deviceId = UUID.randomUUID().toString()
+            prefs.edit().putString(KEY_DEVICE_ID, deviceId).apply()
+        }
+
+        return deviceId
+    }
+
+    // Сохранить рекорд в Firebase и локально
+    suspend fun saveHighScore(context: Context, highScore: HighScore) {
+        val deviceId = getDeviceId(context)
+        val highScoreWithDevice = highScore.copy(deviceId = deviceId)
+
+        // Сохраняем локально
+        saveHighScoreLocally(context, highScoreWithDevice)
+
+        // Сохраняем в Firebase
+        try {
+            val highScoreData = hashMapOf<String, Any>(
+                "playerName" to highScore.playerName,
+                "score" to highScore.score,
+                "level" to highScore.level,
+                "timeSeconds" to highScore.timeSeconds,
+                "date" to highScore.date.time,
+                "deviceId" to deviceId
+            )
+
+            db.collection(HIGH_SCORES_COLLECTION)
+                .add(highScoreData)
+                .await()
+
+        } catch (e: Exception) {
+            // Если нет интернета, сохраняем только локально
+            e.printStackTrace()
+        }
+    }
+
+    // Сохранить рекорд локально
+    private fun saveHighScoreLocally(context: Context, highScore: HighScore) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val highScores = getHighScoresLocally(context).toMutableList()
 
         highScores.add(highScore)
         // Сортируем по очкам (по убыванию) и оставляем топ-10
         val sortedScores = highScores.sortedByDescending { it.score }.take(10)
 
         val jsonScores = sortedScores.joinToString("|") {
-            "${it.playerName},${it.score},${it.level},${it.timeSeconds},${it.date.time}"
+            "${it.playerName},${it.score},${it.level},${it.timeSeconds},${it.date.time},${it.deviceId}"
         }
 
         prefs.edit()
@@ -94,7 +151,49 @@ object GameStatistics {
     }
 
     // Получить таблицу рекордов
-    fun getHighScores(context: Context): List<HighScore> {
+    suspend fun getHighScores(context: Context): List<HighScore> {
+        val localScores = getHighScoresLocally(context)
+
+        try {
+            // Пытаемся получить из Firebase
+            val snapshot = db.collection(HIGH_SCORES_COLLECTION)
+                .orderBy("score", com.google.firebase.firestore.Query.Direction.DESCENDING)
+                .limit(20)
+                .get()
+                .await()
+
+            val firebaseScores = snapshot.documents.mapNotNull { doc ->
+                try {
+                    HighScore(
+                        id = doc.id,
+                        playerName = doc.getString("playerName") ?: "Игрок",
+                        score = doc.getLong("score")?.toInt() ?: 0,
+                        level = doc.getLong("level")?.toInt() ?: 1,
+                        timeSeconds = doc.getLong("timeSeconds")?.toInt() ?: 0,
+                        date = Date(doc.getLong("date") ?: System.currentTimeMillis()),
+                        deviceId = doc.getString("deviceId") ?: ""
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+            }
+
+            // Объединяем и сортируем
+            val allScores = (localScores + firebaseScores)
+                .distinctBy { "${it.playerName}-${it.score}-${it.deviceId}" }
+                .sortedByDescending { it.score }
+                .take(20)
+
+            return allScores
+        } catch (e: Exception) {
+            // Если нет интернета, возвращаем локальные
+            e.printStackTrace()
+            return localScores
+        }
+    }
+
+    // Получить локальные рекорды
+    private fun getHighScoresLocally(context: Context): List<HighScore> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val jsonScores = prefs.getString(KEY_HIGH_SCORES, "") ?: ""
 
@@ -102,40 +201,140 @@ object GameStatistics {
 
         return jsonScores.split("|").mapNotNull { data ->
             val parts = data.split(",")
-            if (parts.size == 5) {
-                HighScore(
-                    playerName = parts[0],
-                    score = parts[1].toIntOrNull() ?: 0,
-                    level = parts[2].toIntOrNull() ?: 1,
-                    timeSeconds = parts[3].toIntOrNull() ?: 0,
-                    date = Date(parts[4].toLongOrNull() ?: 0)
-                )
-            } else null
+            try {
+                when (parts.size) {
+                    6 -> HighScore(
+                        playerName = parts[0],
+                        score = parts[1].toInt(),
+                        level = parts[2].toInt(),
+                        timeSeconds = parts[3].toInt(),
+                        date = Date(parts[4].toLong()),
+                        deviceId = parts[5]
+                    )
+                    5 -> HighScore(
+                        playerName = parts[0],
+                        score = parts[1].toInt(),
+                        level = parts[2].toInt(),
+                        timeSeconds = parts[3].toInt(),
+                        date = Date(parts[4].toLong())
+                    )
+                    else -> null
+                }
+            } catch (e: Exception) {
+                null
+            }
         }
     }
 
     // Обновить общую статистику
-    fun updateTotalStats(context: Context, stats: GameStats) {
+    suspend fun updateTotalStats(context: Context, stats: GameStats) {
+        // Обновляем локально
+        updateTotalStatsLocally(context, stats)
+
+        // Обновляем в Firebase (если есть интернет)
+        try {
+            val statsRef = db.collection(TOTAL_STATS_DOCUMENT).document("global")
+
+            // Получаем текущие данные
+            val snapshot = statsRef.get().await()
+
+            val currentTotalGames = if (snapshot.exists()) {
+                snapshot.getLong("totalGames")?.toInt() ?: 0
+            } else 0
+
+            val currentTotalTime = if (snapshot.exists()) {
+                snapshot.getLong("totalTimeSeconds")?.toInt() ?: 0
+            } else 0
+
+            val currentBestLevel = if (snapshot.exists()) {
+                snapshot.getLong("bestLevel")?.toInt() ?: 1
+            } else 1
+
+            val currentBestScore = if (snapshot.exists()) {
+                snapshot.getLong("bestScore")?.toInt() ?: 0
+            } else 0
+
+            // Обновляем данные
+            val updatedData = hashMapOf<String, Any>(
+                "totalGames" to (currentTotalGames + 1),
+                "totalTimeSeconds" to (currentTotalTime + stats.timeSeconds),
+                "bestLevel" to max(currentBestLevel, stats.level),
+                "bestScore" to max(currentBestScore, stats.score),
+                "lastUpdated" to System.currentTimeMillis()
+            )
+
+            statsRef.set(updatedData).await()
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    // Обновить локальную статистику
+    private fun updateTotalStatsLocally(context: Context, stats: GameStats) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val totalGames = prefs.getInt(KEY_TOTAL_GAMES, 0) + 1
         val totalTime = prefs.getInt(KEY_TOTAL_TIME, 0) + stats.timeSeconds
         val bestLevel = max(prefs.getInt(KEY_BEST_LEVEL, 1), stats.level)
+        val bestScore = max(prefs.getInt(KEY_BEST_SCORE, 0), stats.score)
 
         prefs.edit()
             .putInt(KEY_TOTAL_GAMES, totalGames)
             .putInt(KEY_TOTAL_TIME, totalTime)
             .putInt(KEY_BEST_LEVEL, bestLevel)
+            .putInt(KEY_BEST_SCORE, bestScore)
             .apply()
     }
 
     // Получить общую статистику
-    fun getTotalStats(context: Context): Triple<Int, Int, Int> {
+    suspend fun getTotalStats(context: Context): Triple<Int, Int, Int> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return Triple(
-            prefs.getInt(KEY_TOTAL_GAMES, 0),
-            prefs.getInt(KEY_TOTAL_TIME, 0),
-            prefs.getInt(KEY_BEST_LEVEL, 1)
-        )
+
+        // Сначала возвращаем локальные данные (быстрее)
+        val localTotalGames = prefs.getInt(KEY_TOTAL_GAMES, 0)
+        val localTotalTime = prefs.getInt(KEY_TOTAL_TIME, 0)
+        val localBestLevel = prefs.getInt(KEY_BEST_LEVEL, 1)
+        val localBestScore = prefs.getInt(KEY_BEST_SCORE, 0)
+
+        // В фоне пытаемся обновить из Firebase
+        try {
+            val snapshot = db.collection(TOTAL_STATS_DOCUMENT)
+                .document("global")
+                .get()
+                .await()
+
+            if (snapshot.exists()) {
+                val firebaseTotalGames = snapshot.getLong("totalGames")?.toInt() ?: 0
+                val firebaseTotalTime = snapshot.getLong("totalTimeSeconds")?.toInt() ?: 0
+                val firebaseBestLevel = snapshot.getLong("bestLevel")?.toInt() ?: 1
+                val firebaseBestScore = snapshot.getLong("bestScore")?.toInt() ?: 0
+
+                // Обновляем локальные данные, если Firebase вернул больше значения
+                val newTotalGames = max(localTotalGames, firebaseTotalGames)
+                val newTotalTime = max(localTotalTime, firebaseTotalTime)
+                val newBestLevel = max(localBestLevel, firebaseBestLevel)
+                val newBestScore = max(localBestScore, firebaseBestScore)
+
+                if (newTotalGames != localTotalGames ||
+                    newBestLevel != localBestLevel ||
+                    newBestScore != localBestScore) {
+
+                    prefs.edit()
+                        .putInt(KEY_TOTAL_GAMES, newTotalGames)
+                        .putInt(KEY_TOTAL_TIME, newTotalTime)
+                        .putInt(KEY_BEST_LEVEL, newBestLevel)
+                        .putInt(KEY_BEST_SCORE, newBestScore)
+                        .apply()
+                }
+
+                return Triple(newTotalGames, newTotalTime, newBestLevel)
+            }
+        } catch (e: Exception) {
+            // Просто игнорируем ошибку, используем локальные данные
+            e.printStackTrace()
+        }
+
+        return Triple(localTotalGames, localTotalTime, localBestLevel)
     }
 }
 
@@ -178,6 +377,9 @@ fun DodgeGame() {
     val backgroundImage = ImageBitmap.imageResource(id = R.drawable.background)
 
     val currentLevelConfig = getLevelConfig(currentLevel)
+
+    // Добавляем CoroutineScope
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(gameState) {
         if (gameState == GameState.PLAYING) {
@@ -225,7 +427,10 @@ fun DodgeGame() {
                             level = currentLevel,
                             timeSeconds = gameTimeSeconds
                         )
-                        GameStatistics.updateTotalStats(context, finalStats!!)
+                        // Вызываем в корутине
+                        scope.launch {
+                            GameStatistics.updateTotalStats(context, finalStats!!)
+                        }
                         gameState = GameState.STATS
                     }
 
@@ -344,8 +549,7 @@ fun DodgeGame() {
                             Text(
                                 text = "Прогресс: ${(levelProgress * 100).toInt()}%",
                                 modifier = Modifier.padding(bottom = 6.dp),
-                                color = Color.White
-                            )
+                                color = Color.White)
                             Text(
                                 text = "Счет: ${score / 60}",
                                 modifier = Modifier.padding(bottom = 4.dp),
@@ -372,13 +576,15 @@ fun DodgeGame() {
                     playerName = playerName,
                     onNameChange = { playerName = it },
                     onSaveScore = {
-                        finalStats?.let { stats ->
-                            GameStatistics.saveHighScore(context, HighScore(
-                                playerName = playerName,
-                                score = stats.score,
-                                level = stats.level,
-                                timeSeconds = stats.timeSeconds
-                            ))
+                        scope.launch {  // Добавляем корутину здесь
+                            finalStats?.let { stats ->
+                                GameStatistics.saveHighScore(context, HighScore(
+                                    playerName = playerName,
+                                    score = stats.score,
+                                    level = stats.level,
+                                    timeSeconds = stats.timeSeconds
+                                ))
+                            }
                         }
                         gameState = GameState.WAITING
                     },
@@ -416,7 +622,15 @@ fun MainMenu(
     onShowHighScores: () -> Unit,
     onShowStats: () -> Unit
 ) {
-    val (totalGames, totalTime, bestLevel) = GameStatistics.getTotalStats(LocalContext.current)
+    var totalStats by remember { mutableStateOf(Triple(0, 0, 1)) }
+    var isLoading by remember { mutableStateOf(true) }
+    val context = LocalContext.current
+
+    // Загружаем статистику при первом отображении
+    LaunchedEffect(Unit) {
+        totalStats = GameStatistics.getTotalStats(context)
+        isLoading = false
+    }
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -438,16 +652,29 @@ fun MainMenu(
         )
 
         // Общая статистика
-        Box(
-            modifier = Modifier
-                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                .padding(16.dp)
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Общая статистика", color = Color.White, fontWeight = FontWeight.Bold)
-                Text("Игр сыграно: $totalGames", color = Color.White)
-                Text("Лучший уровень: $bestLevel", color = Color.White)
-                Text("Общее время: ${totalTime / 60}м ${totalTime % 60}с", color = Color.White)
+        if (isLoading) {
+            Box(
+                modifier = Modifier
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                    .padding(16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = Color.White)
+            }
+        } else {
+            val (totalGames, totalTime, bestLevel) = totalStats
+            Box(
+                modifier = Modifier
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                    .padding(16.dp)
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Общая статистика", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("Игр сыграно: $totalGames", color = Color.White)
+                    Text("Лучший уровень: $bestLevel", color = Color.White)
+                    Text("Общее время: ${totalTime / 60}м ${totalTime % 60}с",
+                        color = Color.White)
+                }
             }
         }
 
@@ -557,7 +784,15 @@ fun StatisticsScreen(
 
 @Composable
 fun HighScoresScreen(onBack: () -> Unit) {
-    val highScores = GameStatistics.getHighScores(LocalContext.current)
+    var highScores by remember { mutableStateOf<List<HighScore>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    val context = LocalContext.current
+
+    // Загружаем рекорды при открытии экрана
+    LaunchedEffect(Unit) {
+        highScores = GameStatistics.getHighScores(context)
+        isLoading = false
+    }
 
     Column(
         modifier = Modifier
@@ -573,7 +808,17 @@ fun HighScoresScreen(onBack: () -> Unit) {
                 .padding(bottom = 24.dp)
         )
 
-        if (highScores.isEmpty()) {
+        if (isLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = Color.White)
+            }
+        } else if (highScores.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
