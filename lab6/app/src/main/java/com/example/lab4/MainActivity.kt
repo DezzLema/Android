@@ -90,6 +90,23 @@ object GameStatistics {
     private const val HIGH_SCORES_COLLECTION = "high_scores"
     private const val TOTAL_STATS_DOCUMENT = "global_stats"
 
+    fun clearAllLocalData(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+        // Очищаем все ключи
+        prefs.edit()
+            .remove(KEY_DEVICE_ID)
+            .remove(KEY_HIGH_SCORES)
+            .remove(KEY_TOTAL_GAMES)
+            .remove(KEY_TOTAL_TIME)
+            .remove(KEY_BEST_LEVEL)
+            .remove(KEY_BEST_SCORE)
+            .clear() // Полностью очищаем все SharedPreferences
+            .apply()
+
+        println("Все локальные данные очищены!")
+    }
+
     // Генерируем или получаем уникальный ID устройства
     fun getDeviceId(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -625,6 +642,7 @@ fun MainMenu(
     var totalStats by remember { mutableStateOf(Triple(0, 0, 1)) }
     var isLoading by remember { mutableStateOf(true) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     // Загружаем статистику при первом отображении
     LaunchedEffect(Unit) {
@@ -710,8 +728,30 @@ fun MainMenu(
         ) {
             Text("Статистика", fontSize = 16.sp)
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Кнопка очистки локальных данных (только для отладки)
+        Button(
+            onClick = {
+                scope.launch {
+                    GameStatistics.clearAllLocalData(context)
+                    // Перезагружаем статистику
+                    totalStats = GameStatistics.getTotalStats(context)
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth(0.8f)
+                .height(50.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color.Red.copy(alpha = 0.7f)
+            )
+        ) {
+            Text("Очистить локальные данные", fontSize = 14.sp, color = Color.White)
+        }
     }
 }
+
 
 @Composable
 fun StatisticsScreen(
